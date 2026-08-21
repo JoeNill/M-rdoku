@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Rätsel-Scanner</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2b6cb0">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  :root{
+    --blue:#2b6cb0;
+    --bg:#111418;
+    --panel:#1b2028;
+    --line:#3a4250;
+    --text:#eef1f5;
+    --muted:#8b95a5;
+    --gray-cell:#4a5261;
+    --filled-cell:#2f7a4d;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; min-height:100vh;
+  }
+  header{
+    padding:14px 16px; background:var(--panel); border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+  }
+  header h1{font-size:17px; margin:0; font-weight:600;}
+  header .sub{font-size:12px; color:var(--muted);}
+  main{flex:1; display:flex; flex-direction:column; padding:16px; gap:16px; overflow-y:auto;}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px;}
+  .btn{
+    appearance:none; border:none; border-radius:10px; padding:13px 16px; font-size:15px;
+    font-weight:600; cursor:pointer; color:#fff; background:var(--blue); width:100%;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+  }
+  .btn.secondary{background:#3a4250;}
+  .btn.danger{background:#8a3a3a;}
+  .btn:active{filter:brightness(0.9);}
+  .row{display:flex; gap:10px;}
+  .row .btn{flex:1;}
+  input[type=file]{display:none;}
+  label.filebtn{display:block;}
+  .field{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 0;}
+  .field label{font-size:14px; color:var(--muted);}
+  .field input[type=number]{
+    width:70px; padding:8px; border-radius:8px; border:1px solid var(--line);
+    background:#0f1216; color:var(--text); font-size:16px; text-align:center;
+  }
+  #boardWrap{display:none;}
+  #imageStage{
+    position:relative; width:100%; border-radius:12px; overflow:hidden;
+    background:#000; touch-action:none; line-height:0;
+  }
+  #photo{width:100%; display:block; user-select:none; -webkit-user-drag:none; pointer-events:none;}
+  #gridOverlay{
+    position:absolute; border:2px solid rgba(255,255,255,0.85);
+    display:grid; background:rgba(0,0,0,0);
+  }
+  #gridOverlay .cell{
+    border:1px solid rgba(255,255,255,0.45);
+    display:flex; align-items:center; justify-content:center;
+    font-size:clamp(11px, 3.5vw, 20px); font-weight:700; color:#fff;
+    user-select:none;
+  }
+  body[data-mode="play"] #gridOverlay .cell{cursor:pointer;}
+  #gridOverlay .cell.filled{background:var(--filled-cell);}
+  #gridOverlay .cell.grayed{background:rgba(120,126,140,0.75);}
+  .handle{
+    position:absolute; width:26px; height:26px; margin-left:-13px; margin-top:-13px;
+    background:var(--blue); border:3px solid #fff; border-radius:50%;
+    touch-action:none; z-index:5;
+  }
+  #calControls{display:none;}
+  #playControls{display:none;}
+  .hint{font-size:12px; color:var(--muted); margin-top:8px; line-height:1.5;}
+  footer{padding:10px 16px 18px; text-align:center; font-size:11px; color:var(--muted);}
+</style>
+</head>
+<body data-mode="setup">
+
+<header>
+  <div>
+    <h1>Rätsel-Scanner</h1>
+    <div class="sub">Foto → Raster → Buchstaben eintragen</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- SETUP -->
+  <div class="card" id="setupCard">
+    <div class="row">
+      <label class="filebtn btn" for="camInput">📷 Foto aufnehmen</label>
+      <label class="filebtn btn secondary" for="galInput">🖼 Aus Galerie</label>
+    </div>
+    <input type="file" accept="image/*" capture="environment" id="camInput">
+    <input type="file" accept="image/*" id="galInput">
+    <p class="hint">Fotografiere dein Spielfeld möglichst gerade von oben. Danach legst du ein Raster darüber und trägst Buchstaben ein – benachbarte Felder werden dann automatisch ausgegraut.</p>
+  </div>
+
+  <div class="card" id="resumeCard" style="display:none;">
+    <p style="margin-top:0;">Es gibt ein gespeichertes Rätsel.</p>
+    <div class="row">
+      <button class="btn" id="resumeBtn">Fortsetzen</button>
+      <button class="btn secondary" id="discardBtn">Verwerfen</button>
+    </div>
+  </div>
+
+  <!-- BOARD -->
+  <div id="boardWrap">
+    <div class="card">
+      <div id="imageStage">
+        <img id="photo" alt="Spielfeld">
+        <div id="gridOverlay"></div>
+        <div class="handle" id="handleTL"></div>
+        <div class="handle" id="handleBR"></div>
+      </div>
+    </div>
+
+    <div class="card" id="calControls">
+      <div class="field">
+        <label>Reihen</label>
+        <input type="number" id="rowsInput" min="2" max="30" value="9">
+      </div>
+      <div class="field">
+        <label>Spalten</label>
+        <input type="number" id="colsInput" min="2" max="30" value="9">
+      </div>
+      <p class="hint">Ziehe die blauen Punkte auf die äußeren Ecken deines Spielfelds. Passe Reihen/Spalten an, bis das Raster passt.</p>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn secondary" id="backToSetupBtn">Neues Foto</button>
+        <button class="btn" id="applyGridBtn">Raster übernehmen</button>
+      </div>
+    </div>
+
+    <div class="card" id="playControls">
+      <p class="hint" style="margin-top:0;">Tippe ein leeres Feld an, um einen Buchstaben einzutragen. Ausgegraute Felder sind durch Nachbarn blockiert. Tippe ein gefülltes Feld erneut an, um es zu löschen.</p>
+      <div class="row">
+        <button class="btn secondary" id="resetLettersBtn">Buchstaben löschen</button>
+        <button class="btn danger" id="newPhotoBtn">Neues Foto</button>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>Läuft offline · „Zum Home-Bildschirm hinzufügen“ für App-Icon</footer>
+
+<script>
+(function(){
+  const body = document.body;
+  const setupCard = document.getElementById('setupCard');
+  const resumeCard = document.getElementById('resumeCard');
+  const boardWrap = document.getElementById('boardWrap');
+  const calControls = document.getElementById('calControls');
+  const playControls = document.getElementById('playControls');
+  const photo = document.getElementById('photo');
+  const stage = document.getElementById('imageStage');
+  const overlay = document.getElementById('gridOverlay');
+  const handleTL = document.getElementById('handleTL');
+  const handleBR = document.getElementById('handleBR');
+  const rowsInput = document.getElementById('rowsInput');
+  const colsInput = document.getElementById('colsInput');
+
+  const STORAGE_KEY = 'raetsel-scanner-state-v1';
+
+  let state = {
+    photoDataUrl: null,
+    rows: 9,
+    cols: 9,
+    rect: { x: 10, y: 10, w: 80, h: 80 }, // % of image
+    letters: {}, // "r-c" -> letter
+    mode: 'setup' // setup | calibrate | play
+  };
+
+  function save(){
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
+  }
+  function load(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(raw){ return JSON.parse(raw); }
+    }catch(e){}
+    return null;
+  }
+
+  const saved = load();
+  if(saved && saved.photoDataUrl){
+    resumeCard.style.display = 'block';
+  }
+
+  document.getElementById('resumeBtn').addEventListener('click', () => {
+    state = saved;
+    resumeCard.style.display = 'none';
+    setupCard.style.display = 'none';
+    enterBoard(state.mode === 'setup' ? 'calibrate' : state.mode);
+  });
+  document.getElementById('discardBtn').addEventListener('click', () => {
+    localStorage.removeItem(STORAGE_KEY);
+    resumeCard.style.display = 'none';
+  });
+
+  function readFile(input){
+    input.addEventListener('change', () => {
+      const file = input.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        state = {
+          photoDataUrl: e.target.result,
+          rows: 9, cols: 9,
+          rect: { x: 10, y: 10, w: 80, h: 80 },
+          letters: {},
+          mode: 'calibrate'
+        };
+        setupCard.style.display = 'none';
+        resumeCard.style.display = 'none';
+        enterBoard('calibrate');
+      };
+      reader.readAsDataURL(file);
+      input.value = '';
+    });
+  }
+  readFile(document.getElementById('camInput'));
+  readFile(document.getElementById('galInput'));
+
+  function enterBoard(mode){
+    boardWrap.style.display = 'block';
+    photo.src = state.photoDataUrl;
+    rowsInput.value = state.rows;
+    colsInput.value = state.cols;
+    setMode(mode);
+    photo.onload = () => { positionHandles(); renderGrid(); };
+    if(photo.complete){ positionHandles(); renderGrid(); }
+  }
+
+  function setMode(mode){
+    state.mode = mode;
+    body.dataset.mode = mode;
+    calControls.style.display = mode === 'calibrate' ? 'block' : 'none';
+    playControls.style.display = mode === 'play' ? 'block' : 'none';
+    handleTL.style.display = mode === 'calibrate' ? 'block' : 'none';
+    handleBR.style.display = mode === 'calibrate' ? 'block' : 'none';
+    save();
+  }
+
+  function positionHandles(){
+    handleTL.style.left = state.rect.x + '%';
+    handleTL.style.top = state.rect.y + '%';
+    handleBR.style.left = (state.rect.x + state.rect.w) + '%';
+    handleBR.style.top = (state.rect.y + state.rect.h) + '%';
+  }
+
+  function renderGrid(){
+    overlay.style.left = state.rect.x + '%';
+    overlay.style.top = state.rect.y + '%';
+    overlay.style.width = state.rect.w + '%';
+    overlay.style.height = state.rect.h + '%';
+    overlay.style.gridTemplateColumns = `repeat(${state.cols}, 1fr)`;
+    overlay.style.gridTemplateRows = `repeat(${state.rows}, 1fr)`;
+    overlay.innerHTML = '';
+    for(let r=0; r<state.rows; r++){
+      for(let c=0; c<state.cols; c++){
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.r = r;
+        cell.dataset.c = c;
+        const key = r+'-'+c;
+        if(state.letters[key]){
+          cell.textContent = state.letters[key];
+          cell.classList.add('filled');
+        }
+        overlay.appendChild(cell);
+      }
+    }
+    applyGrayOut();
+    if(state.mode === 'play'){
+      overlay.querySelectorAll('.cell').forEach(cell => {
+        cell.addEventListener('click', onCellClick);
+      });
+    }
+  }
+
+  function applyGrayOut(){
+    const cells = overlay.querySelectorAll('.cell');
+    cells.forEach(c => c.classList.remove('grayed'));
+    cells.forEach(cell => {
+      const r = +cell.dataset.r, c = +cell.dataset.c;
+      if(!state.letters[r+'-'+c]) return;
+      const neighbors = [[r-1,c],[r+1,c],[r,c-1],[r,c+1]];
+      neighbors.forEach(([nr,nc]) => {
+        if(nr<0||nc<0||nr>=state.rows||nc>=state.cols) return;
+        const nKey = nr+'-'+nc;
+        if(state.letters[nKey]) return;
+        const nCell = overlay.querySelector(`.cell[data-r="${nr}"][data-c="${nc}"]`);
+        if(nCell) nCell.classList.add('grayed');
+      });
+    });
+  }
+
+  function onCellClick(e){
+    const cell = e.currentTarget;
+    const r = cell.dataset.r, c = cell.dataset.c;
+    const key = r+'-'+c;
+    if(cell.classList.contains('grayed')) return;
+    if(state.letters[key]){
+      if(confirm('Buchstabe "' + state.letters[key] + '" löschen?')){
+        delete state.letters[key];
+      }
+    } else {
+      const val = prompt('Buchstabe eingeben:');
+      if(val && val.trim().length){
+        state.letters[key] = val.trim().charAt(0).toUpperCase();
+      } else {
+        return;
+      }
+    }
+    save();
+    renderGrid();
+  }
+
+  // --- Handle dragging ---
+  function dragHandle(handle, isTL){
+    let dragging = false;
+    const start = (e) => {
+      dragging = true;
+      e.preventDefault();
+    };
+    const move = (e) => {
+      if(!dragging) return;
+      const point = e.touches ? e.touches[0] : e;
+      const rect = stage.getBoundingClientRect();
+      let px = ((point.clientX - rect.left) / rect.width) * 100;
+      let py = ((point.clientY - rect.top) / rect.height) * 100;
+      px = Math.max(0, Math.min(100, px));
+      py = Math.max(0, Math.min(100, py));
+      if(isTL){
+        const brX = state.rect.x + state.rect.w;
+        const brY = state.rect.y + state.rect.h;
+        state.rect.x = Math.min(px, brX - 5);
+        state.rect.y = Math.min(py, brY - 5);
+        state.rect.w = brX - state.rect.x;
+        state.rect.h = brY - state.rect.y;
+      } else {
+        state.rect.w = Math.max(5, px - state.rect.x);
+        state.rect.h = Math.max(5, py - state.rect.y);
+      }
+      positionHandles();
+      renderGrid();
+    };
+    const end = () => { dragging = false; save(); };
+    handle.addEventListener('mousedown', start);
+    handle.addEventListener('touchstart', start, {passive:false});
+    window.addEventListener('mousemove', move);
+    window.addEventListener('touchmove', move, {passive:false});
+    window.addEventListener('mouseup', end);
+    window.addEventListener('touchend', end);
+  }
+  dragHandle(handleTL, true);
+  dragHandle(handleBR, false);
+
+  rowsInput.addEventListener('input', () => {
+    const v = Math.max(2, Math.min(30, parseInt(rowsInput.value) || 2));
+    state.rows = v; state.letters = {}; save(); renderGrid();
+  });
+  colsInput.addEventListener('input', () => {
+    const v = Math.max(2, Math.min(30, parseInt(colsInput.value) || 2));
+    state.cols = v; state.letters = {}; save(); renderGrid();
+  });
+
+  document.getElementById('applyGridBtn').addEventListener('click', () => {
+    setMode('play');
+    renderGrid();
+  });
+
+  document.getElementById('backToSetupBtn').addEventListener('click', resetAll);
+  document.getElementById('newPhotoBtn').addEventListener('click', resetAll);
+
+  document.getElementById('resetLettersBtn').addEventListener('click', () => {
+    if(confirm('Alle Buchstaben löschen?')){
+      state.letters = {};
+      save();
+      renderGrid();
+    }
+  });
+
+  function resetAll(){
+    localStorage.removeItem(STORAGE_KEY);
+    boardWrap.style.display = 'none';
+    setupCard.style.display = 'block';
+    resumeCard.style.display = 'none';
+  }
+
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(()=>{});
+    });
+  }
+})();
+</script>
+</body>
+</html>
